@@ -1,5 +1,5 @@
 {
-  "name": "hd-canvas",
+  "name": "@palmerama/hd-canvas",
   "version": "1.0.0",
   "description": "A reusable library for generative art with HDR color, configurable paper sizes, and print-quality export.",
   "type": "module",
