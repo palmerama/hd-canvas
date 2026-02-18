@@ -1,0 +1,47 @@
+{
+  "name": "hd-canvas",
+  "version": "1.0.0",
+  "description": "A reusable library for generative art with HDR color, configurable paper sizes, and print-quality export.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "canvas",
+    "hdr",
+    "generative-art",
+    "print",
+    "dpi",
+    "tone-mapping",
+    "png",
+    "float-buffer"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "fast-png": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "canvas": "^3.1.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
