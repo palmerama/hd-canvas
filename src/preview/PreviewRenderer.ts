@@ -21,6 +21,17 @@ export interface PreviewRendererOptions {
   onZoomChange?: (zoomPercent: number) => void;
 }
 
+export interface OverlayCanvasOptions {
+  /** CSS opacity (0–1). Default: 1 */
+  opacity?: number;
+  /** CSS mix-blend-mode. Default: 'normal' */
+  blendMode?: string;
+  /** Whether the overlay is visible. Default: true */
+  visible?: boolean;
+  /** CSS z-index for stacking order. Default: 1 */
+  zIndex?: number;
+}
+
 /** Internal viewport state tracking zoom & pan */
 interface ViewportState {
   /** Zoom scale: 1.0 = 1:1 pixel mapping between buffer and screen */
@@ -28,6 +39,12 @@ interface ViewportState {
   /** Pan offset in buffer-pixel coordinates (top-left corner of visible region) */
   panX: number;
   panY: number;
+}
+
+/** Internal tracking for overlay canvases */
+interface OverlayEntry {
+  canvas: HTMLCanvasElement;
+  options: Required<OverlayCanvasOptions>;
 }
 
 export class PreviewRenderer {
@@ -46,6 +63,9 @@ export class PreviewRenderer {
   private fitScale = 1;
   /** Current viewport state */
   private viewport: ViewportState = { zoom: 0, panX: 0, panY: 0 };
+
+  /** Tracked overlay canvases */
+  private overlays: OverlayEntry[] = [];
 
   // Drag state
   private dragging = false;
@@ -69,8 +89,18 @@ export class PreviewRenderer {
     this.maxZoom = options.maxZoom ?? 4;
     this.onZoomChange = options.onZoomChange;
 
+    // Container must be positioned for absolute overlay children
+    const pos = getComputedStyle(this.container).position;
+    if (pos === 'static' || pos === '') {
+      this.container.style.position = 'relative';
+    }
+
     this.canvas = document.createElement('canvas');
-    this.canvas.style.display = 'block';
+    this.canvas.style.position = 'absolute';
+    this.canvas.style.top = '0';
+    this.canvas.style.left = '0';
+    this.canvas.style.width = '100%';
+    this.canvas.style.height = '100%';
     this.canvas.style.cursor = 'default';
     this.canvas.tabIndex = 0; // Make focusable for keyboard events
     this.canvas.style.outline = 'none';
@@ -105,6 +135,7 @@ export class PreviewRenderer {
       if (!this.destroyed) {
         this.recomputeFitScale();
         this.clampViewport();
+        this.repositionOverlays();
         this.refresh();
       }
     });
@@ -143,6 +174,9 @@ export class PreviewRenderer {
    */
   refresh(): void {
     if (this.destroyed) return;
+
+    // Keep overlays in sync with viewport on every refresh
+    this.repositionOverlays();
 
     const containerW = this.container.clientWidth;
     const containerH = this.container.clientHeight;
@@ -217,8 +251,89 @@ export class PreviewRenderer {
     this.ctx.putImageData(imageData, dstX0, dstY0);
   }
 
+  // --- Overlay Canvas API ---
+
+  /**
+   * Create an overlay canvas positioned exactly over the buffer display area.
+   *
+   * The returned canvas is automatically sized and repositioned to match the
+   * preview's viewport — including on container resize and zoom/pan changes.
+   * Use it as a WebGL rendering surface, 2D drawing canvas, or anything else.
+   *
+   * The canvas `width` and `height` attributes are set to the display
+   * dimensions (CSS pixels), giving 1:1 pixel mapping at the current zoom.
+   *
+   * @example
+   * // WebGL overlay
+   * const glCanvas = preview.createOverlayCanvas({ blendMode: 'screen' });
+   * const renderer = new THREE.WebGLRenderer({ canvas: glCanvas });
+   *
+   * // 2D overlay
+   * const canvas2d = preview.createOverlayCanvas({ opacity: 0.5 });
+   * const ctx = canvas2d.getContext('2d');
+   */
+  createOverlayCanvas(options?: OverlayCanvasOptions): HTMLCanvasElement {
+    if (this.destroyed) throw new Error('PreviewRenderer is destroyed');
+
+    const resolved: Required<OverlayCanvasOptions> = {
+      opacity: options?.opacity ?? 1,
+      blendMode: options?.blendMode ?? 'normal',
+      visible: options?.visible ?? true,
+      zIndex: options?.zIndex ?? 1,
+    };
+
+    const overlay = document.createElement('canvas');
+    overlay.style.position = 'absolute';
+    overlay.style.pointerEvents = 'none';
+    this.applyOverlayStyle(overlay, resolved);
+
+    const entry: OverlayEntry = { canvas: overlay, options: resolved };
+    this.overlays.push(entry);
+
+    this.container.appendChild(overlay);
+    this.positionOverlay(entry);
+
+    return overlay;
+  }
+
+  /**
+   * Update an overlay canvas's visual options after creation.
+   * Throws if the canvas was not created by this PreviewRenderer.
+   */
+  updateOverlay(canvas: HTMLCanvasElement, options: Partial<OverlayCanvasOptions>): void {
+    const entry = this.overlays.find(e => e.canvas === canvas);
+    if (!entry) throw new Error('Canvas is not a tracked overlay');
+
+    if (options.opacity !== undefined) entry.options.opacity = options.opacity;
+    if (options.blendMode !== undefined) entry.options.blendMode = options.blendMode;
+    if (options.visible !== undefined) entry.options.visible = options.visible;
+    if (options.zIndex !== undefined) entry.options.zIndex = options.zIndex;
+
+    this.applyOverlayStyle(entry.canvas, entry.options);
+  }
+
+  /**
+   * Remove an overlay canvas and clean up.
+   * Returns true if the canvas was found and removed, false otherwise.
+   */
+  removeOverlayCanvas(canvas: HTMLCanvasElement): boolean {
+    const idx = this.overlays.findIndex(e => e.canvas === canvas);
+    if (idx === -1) return false;
+
+    this.overlays.splice(idx, 1);
+    canvas.remove();
+    return true;
+  }
+
   destroy(): void {
     this.destroyed = true;
+
+    // Clean up all overlays
+    for (const entry of this.overlays) {
+      entry.canvas.remove();
+    }
+    this.overlays.length = 0;
+
     this.canvas.removeEventListener('wheel', this.handleWheel);
     this.canvas.removeEventListener('mousedown', this.handleMouseDown);
     window.removeEventListener('mousemove', this.handleMouseMove);
@@ -306,6 +421,66 @@ export class PreviewRenderer {
 
   private emitZoomChange(): void {
     this.onZoomChange?.(this.zoomPercent);
+  }
+
+  // --- Overlay positioning ---
+
+  /**
+   * Compute the current display rect for the buffer in container coordinates.
+   * This is the exact region where buffer content appears on screen —
+   * overlays are positioned to match this rect precisely.
+   */
+  private computeDisplayRect(): { x: number; y: number; w: number; h: number } {
+    const containerW = this.container.clientWidth;
+    const containerH = this.container.clientHeight;
+    const { zoom, panX, panY } = this.viewport;
+    const bufW = this.buffer.width;
+    const bufH = this.buffer.height;
+
+    const totalBufScreenW = bufW * zoom;
+    const totalBufScreenH = bufH * zoom;
+    const offsetScreenX = totalBufScreenW < containerW ? (containerW - totalBufScreenW) / 2 : 0;
+    const offsetScreenY = totalBufScreenH < containerH ? (containerH - totalBufScreenH) / 2 : 0;
+
+    return {
+      x: Math.round(offsetScreenX - panX * zoom),
+      y: Math.round(offsetScreenY - panY * zoom),
+      w: Math.round(totalBufScreenW),
+      h: Math.round(totalBufScreenH),
+    };
+  }
+
+  /** Position a single overlay to match the current display rect */
+  private positionOverlay(entry: OverlayEntry): void {
+    const rect = this.computeDisplayRect();
+    const { canvas } = entry;
+
+    canvas.style.left = `${rect.x}px`;
+    canvas.style.top = `${rect.y}px`;
+    canvas.style.width = `${rect.w}px`;
+    canvas.style.height = `${rect.h}px`;
+
+    // Set canvas backing dimensions to match display size for 1:1 pixels.
+    // Only update if changed — resizing a canvas clears its content.
+    if (canvas.width !== rect.w || canvas.height !== rect.h) {
+      canvas.width = rect.w;
+      canvas.height = rect.h;
+    }
+  }
+
+  /** Reposition all overlays (called on resize, zoom, pan) */
+  private repositionOverlays(): void {
+    for (const entry of this.overlays) {
+      this.positionOverlay(entry);
+    }
+  }
+
+  /** Apply visual style options to an overlay canvas */
+  private applyOverlayStyle(canvas: HTMLCanvasElement, opts: Required<OverlayCanvasOptions>): void {
+    canvas.style.opacity = String(opts.opacity);
+    canvas.style.mixBlendMode = opts.blendMode;
+    canvas.style.display = opts.visible ? 'block' : 'none';
+    canvas.style.zIndex = String(opts.zIndex);
   }
 
   // --- Event handlers ---

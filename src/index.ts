@@ -31,7 +31,7 @@ export {
 } from './core/HDCanvas.js';
 
 // Preview
-export { PreviewRenderer, type PreviewRendererOptions } from './preview/PreviewRenderer.js';
+export { PreviewRenderer, type PreviewRendererOptions, type OverlayCanvasOptions } from './preview/PreviewRenderer.js';
 export { calculateFit, type FitMode, type FitResult } from './preview/FitStrategy.js';
 
 // Bridge
