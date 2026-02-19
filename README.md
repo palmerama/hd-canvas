@@ -12,13 +12,14 @@ Build artwork with unbounded float colors (values > 1.0 = super-bright HDR), pre
 - **Print-ready PNG export** — pHYs chunk injection for correct DPI metadata, 8-bit and 16-bit output
 - **Canvas 2D bridge** — draw with the familiar `fillRect`, `arc`, `fillText` API, auto-tiled for large formats
 - **Zoom/pan preview** — scroll-wheel zoom centered on cursor, click-drag pan, keyboard shortcuts, visible-region-only rendering
+- **Overlay canvases** — layer WebGL, Canvas 2D, or any canvas on top of the preview, perfectly aligned and auto-sized
 - **Blend modes** — normal (alpha composite), additive, multiply — layer effects in HDR space
 - **Zero native dependencies** — pure JS PNG encoding via `fast-png`, runs in browser and Node.js
 
 ## Install
 
 ```bash
-npm install hd-canvas
+npm install @palmerama/hd-canvas
 ```
 
 ## Quick Start
@@ -28,7 +29,7 @@ import {
   HDCanvas,
   attachExportPipeline,
   PreviewRenderer,
-} from 'hd-canvas';
+} from '@palmerama/hd-canvas';
 
 // 1. Create a canvas — A3 paper at 300 DPI
 const canvas = new HDCanvas({ paperSize: 'A3', dpi: 300 });
@@ -100,7 +101,7 @@ canvas.putRegion(x, y, region);                        // paste sub-buffer
 The raw float pixel buffer. Used directly for advanced operations.
 
 ```typescript
-import { ColorBuffer } from 'hd-canvas';
+import { ColorBuffer } from '@palmerama/hd-canvas';
 
 const buf = new ColorBuffer(1920, 1080, 32); // width, height, depth
 buf.setPixel(0, 0, 1.5, 0.3, 0.0, 1.0);    // HDR orange
@@ -110,7 +111,7 @@ buf.data; // Float32Array — direct access for bulk operations
 #### Paper Sizes
 
 ```typescript
-import { PAPER_SIZES, sizeToPx, resolvePaperSize, estimateBufferBytes } from 'hd-canvas';
+import { PAPER_SIZES, sizeToPx, resolvePaperSize, estimateBufferBytes } from '@palmerama/hd-canvas';
 
 // All presets: A0–A6, letter, legal, tabloid
 PAPER_SIZES.A4;     // { widthMM: 210, heightMM: 297 }
@@ -171,7 +172,7 @@ canvas.drawWith2D(callback, {
 Interactive zoom/pan preview for browser environments.
 
 ```typescript
-import { PreviewRenderer } from 'hd-canvas';
+import { PreviewRenderer } from '@palmerama/hd-canvas';
 
 const preview = new PreviewRenderer(canvas, {
   container: document.getElementById('preview')!,
@@ -188,12 +189,64 @@ preview.destroy(); // clean up event listeners
 - `0` key: reset zoom
 - Double-click: fit to view
 
+#### Overlay Canvases
+
+Layer additional canvases (WebGL, 2D, etc.) on top of the preview, perfectly aligned with the buffer display area. The library handles positioning, sizing, and resize tracking automatically.
+
+```typescript
+// WebGL overlay — e.g., Three.js rendering aligned to the buffer
+const glCanvas = preview.createOverlayCanvas({
+  blendMode: 'screen',  // CSS mix-blend-mode
+  opacity: 1.0,
+});
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas });
+renderer.setSize(glCanvas.width, glCanvas.height, false);
+
+// 2D overlay — e.g., annotations, UI, drawing
+const drawCanvas = preview.createOverlayCanvas({
+  opacity: 0.5,
+  zIndex: 2,
+});
+const ctx = drawCanvas.getContext('2d')!;
+ctx.fillStyle = 'red';
+ctx.fillRect(10, 10, 100, 100); // positioned relative to the buffer
+```
+
+The overlay canvas is automatically:
+- **Positioned** to match the buffer's display area (including letterbox offsets)
+- **Sized** to the buffer's display dimensions (`canvas.width` and `canvas.height` are set for 1:1 pixel mapping)
+- **Repositioned** on container resize via the existing `ResizeObserver`
+- **Updated** on zoom/pan changes during `refresh()`
+
+**Options:**
+
+```typescript
+interface OverlayCanvasOptions {
+  opacity?: number;    // CSS opacity, 0–1. Default: 1
+  blendMode?: string;  // CSS mix-blend-mode. Default: 'normal'
+  visible?: boolean;   // Show/hide. Default: true
+  zIndex?: number;     // Stacking order. Default: 1
+}
+```
+
+**Managing overlays:**
+
+```typescript
+// Update options after creation
+preview.updateOverlay(glCanvas, { opacity: 0.8, visible: false });
+
+// Remove an overlay
+preview.removeOverlayCanvas(glCanvas);
+
+// All overlays are cleaned up automatically on preview.destroy()
+```
+
 ### Tone Mapping
 
 Compress HDR float values to displayable/exportable range.
 
 ```typescript
-import { ToneMapper, reinhard, aces, clamp } from 'hd-canvas';
+import { ToneMapper, reinhard, aces, clamp } from '@palmerama/hd-canvas';
 
 // Use standalone functions
 reinhard(2.0);  // → 0.667 (smooth compression)
@@ -225,7 +278,7 @@ const mapper = new ToneMapper({
 Print-ready PNG export with DPI metadata.
 
 ```typescript
-import { attachExportPipeline, exportBuffer, exportAndDownload } from 'hd-canvas';
+import { attachExportPipeline, exportBuffer, exportAndDownload } from '@palmerama/hd-canvas';
 
 // Option 1: Attach to HDCanvas (recommended)
 attachExportPipeline(canvas);
@@ -255,7 +308,7 @@ await exportAndDownload(canvas, { toneMap: 'aces' }, 'my-artwork.png');
 #### PNG Exporter (low-level)
 
 ```typescript
-import { PNGExporter, dpiToPixelsPerMeter } from 'hd-canvas';
+import { PNGExporter, dpiToPixelsPerMeter } from '@palmerama/hd-canvas';
 
 const exporter = new PNGExporter();
 
@@ -287,7 +340,7 @@ dpiToPixelsPerMeter(300); // → 11811
 ### Generative Flow Field
 
 ```typescript
-import { HDCanvas, attachExportPipeline } from 'hd-canvas';
+import { HDCanvas, attachExportPipeline } from '@palmerama/hd-canvas';
 
 const canvas = new HDCanvas({ paperSize: 'A3', dpi: 300 });
 canvas.clear(0.02, 0.02, 0.05, 1.0); // near-black background
@@ -390,7 +443,7 @@ hd-canvas/
       PaperSize.ts      — Paper size registry + DPI calculations
       HDCanvas.ts       — Main class, wires everything together
     preview/
-      PreviewRenderer.ts — Zoom/pan interactive preview
+      PreviewRenderer.ts — Zoom/pan interactive preview + overlay canvas management
       FitStrategy.ts     — Contain/cover fitting math
     bridge/
       Canvas2DBridge.ts  — Canvas 2D API → float buffer bridge
