@@ -58,6 +58,7 @@ export class PreviewRenderer {
 
   private resizeObserver: ResizeObserver | null = null;
   private destroyed = false;
+  private rafId: number | null = null;
 
   /** The scale at which the full buffer fits the container */
   private fitScale = 1;
@@ -169,10 +170,25 @@ export class PreviewRenderer {
   }
 
   /**
-   * Refresh the preview — reads the HDR buffer and renders the visible
-   * region to the screen canvas.
+   * Schedule a refresh on the next animation frame.
+   * Multiple calls per frame are coalesced into a single render.
    */
   refresh(): void {
+    if (this.destroyed) return;
+
+    if (this.rafId === null) {
+      this.rafId = requestAnimationFrame(() => {
+        this.rafId = null;
+        this.renderFrame();
+      });
+    }
+  }
+
+  /**
+   * Synchronous render — reads the HDR buffer and renders the visible
+   * region to the screen canvas. Called by rAF or directly for tests.
+   */
+  renderFrame(): void {
     if (this.destroyed) return;
 
     // Keep overlays in sync with viewport on every refresh
@@ -222,29 +238,42 @@ export class PreviewRenderer {
 
     if (dstW <= 0 || dstH <= 0) return;
 
-    // Render only the visible region
+    // Render only the visible region with optimized sampling.
+    // Pre-compute the inverse zoom and buffer row stride to avoid
+    // repeated division and multiplication in the inner loop.
     const imageData = this.ctx.createImageData(dstW, dstH);
     const dst = imageData.data;
     const srcData = this.buffer.data;
+    const invZoom = 1 / zoom;
+    const bufStride = bufW * 4;
+    const maxSrcY = srcY1 - 1;
+    const maxSrcX = srcX1 - 1;
 
-    // Sample from buffer → screen pixels
     for (let dy = 0; dy < dstH; dy++) {
-      // Map screen Y back to buffer Y
-      const bufY = Math.min(srcY0 + (dy / zoom), srcY1 - 1);
-      const sy = Math.floor(bufY);
+      // Map screen Y → buffer Y (nearest neighbor, integer math)
+      const bufY = srcY0 + dy * invZoom;
+      const sy = bufY < maxSrcY ? (bufY | 0) : maxSrcY; // |0 is faster Math.floor for positive numbers
+      const srcRowBase = sy * bufStride;
+      const dstRowBase = dy * dstW * 4;
 
       for (let dx = 0; dx < dstW; dx++) {
-        const bufX = Math.min(srcX0 + (dx / zoom), srcX1 - 1);
-        const sx = Math.floor(bufX);
+        const bufX = srcX0 + dx * invZoom;
+        const sx = bufX < maxSrcX ? (bufX | 0) : maxSrcX;
+        const srcIdx = srcRowBase + sx * 4;
+        const dstIdx = dstRowBase + dx * 4;
 
-        const srcIdx = (sy * bufW + sx) * 4;
-        const dstIdx = (dy * dstW + dx) * 4;
+        // Clamp [0,1] → [0,255] using bitwise-or-zero for fast truncation.
+        // The +0.5 before |0 gives rounding behavior.
+        // Branchless clamp: val < 0 → 0, val > 1 → 1, else val
+        const r = srcData[srcIdx]!;
+        const g = srcData[srcIdx + 1]!;
+        const b = srcData[srcIdx + 2]!;
+        const a = srcData[srcIdx + 3]!;
 
-        // Clamp tone map: [0,1] → [0,255]
-        dst[dstIdx]     = Math.round(Math.max(0, Math.min(1, srcData[srcIdx]!)) * 255);
-        dst[dstIdx + 1] = Math.round(Math.max(0, Math.min(1, srcData[srcIdx + 1]!)) * 255);
-        dst[dstIdx + 2] = Math.round(Math.max(0, Math.min(1, srcData[srcIdx + 2]!)) * 255);
-        dst[dstIdx + 3] = Math.round(Math.max(0, Math.min(1, srcData[srcIdx + 3]!)) * 255);
+        dst[dstIdx]     = ((r <= 0 ? 0 : r >= 1 ? 1 : r) * 255 + 0.5) | 0;
+        dst[dstIdx + 1] = ((g <= 0 ? 0 : g >= 1 ? 1 : g) * 255 + 0.5) | 0;
+        dst[dstIdx + 2] = ((b <= 0 ? 0 : b >= 1 ? 1 : b) * 255 + 0.5) | 0;
+        dst[dstIdx + 3] = ((a <= 0 ? 0 : a >= 1 ? 1 : a) * 255 + 0.5) | 0;
       }
     }
 
@@ -327,6 +356,12 @@ export class PreviewRenderer {
 
   destroy(): void {
     this.destroyed = true;
+
+    // Cancel any pending animation frame
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
 
     // Clean up all overlays
     for (const entry of this.overlays) {

@@ -247,4 +247,211 @@ describe('ColorBuffer', () => {
       expect(region.data).toBeInstanceOf(Float64Array);
     });
   });
+
+  describe('setPixelUnchecked', () => {
+    it('writes pixel data without bounds checking', () => {
+      const buf = new ColorBuffer(10, 10);
+      buf.setPixelUnchecked(5, 7, 0.2, 0.4, 0.6, 0.8);
+      const [r, g, b, a] = buf.getPixel(5, 7);
+      expect(r).toBeCloseTo(0.2);
+      expect(g).toBeCloseTo(0.4);
+      expect(b).toBeCloseTo(0.6);
+      expect(a).toBeCloseTo(0.8);
+    });
+
+    it('defaults alpha to 1.0', () => {
+      const buf = new ColorBuffer(5, 5);
+      buf.setPixelUnchecked(0, 0, 1, 0, 0);
+      expect(buf.getPixel(0, 0)[3]).toBe(1.0);
+    });
+
+    it('produces identical results to setPixel', () => {
+      const buf1 = new ColorBuffer(10, 10);
+      const buf2 = new ColorBuffer(10, 10);
+      for (let y = 0; y < 10; y++) {
+        for (let x = 0; x < 10; x++) {
+          const r = Math.random(), g = Math.random(), b = Math.random(), a = Math.random();
+          buf1.setPixel(x, y, r, g, b, a);
+          buf2.setPixelUnchecked(x, y, r, g, b, a);
+        }
+      }
+      for (let i = 0; i < buf1.data.length; i++) {
+        expect(buf2.data[i]).toBe(buf1.data[i]);
+      }
+    });
+  });
+
+  describe('blendPixelUnchecked', () => {
+    it('normal blend matches blendPixel', () => {
+      const buf1 = new ColorBuffer(5, 5);
+      const buf2 = new ColorBuffer(5, 5);
+      buf1.setPixel(0, 0, 1, 0, 0, 1);
+      buf2.setPixel(0, 0, 1, 0, 0, 1);
+      buf1.blendPixel(0, 0, 0, 1, 0, 0.5, 'normal');
+      buf2.blendPixelUnchecked(0, 0, 0, 1, 0, 0.5, 'normal');
+      for (let i = 0; i < 4; i++) {
+        expect(buf2.data[i]).toBeCloseTo(buf1.data[i]!, 10);
+      }
+    });
+
+    it('add blend matches blendPixel', () => {
+      const buf1 = new ColorBuffer(5, 5);
+      const buf2 = new ColorBuffer(5, 5);
+      buf1.setPixel(0, 0, 0.5, 0.3, 0.1, 1);
+      buf2.setPixel(0, 0, 0.5, 0.3, 0.1, 1);
+      buf1.blendPixel(0, 0, 0.2, 0.4, 0.6, 1, 'add');
+      buf2.blendPixelUnchecked(0, 0, 0.2, 0.4, 0.6, 1, 'add');
+      for (let i = 0; i < 4; i++) {
+        expect(buf2.data[i]).toBeCloseTo(buf1.data[i]!, 10);
+      }
+    });
+
+    it('multiply blend matches blendPixel', () => {
+      const buf1 = new ColorBuffer(5, 5);
+      const buf2 = new ColorBuffer(5, 5);
+      buf1.setPixel(0, 0, 0.5, 0.8, 1.0, 1);
+      buf2.setPixel(0, 0, 0.5, 0.8, 1.0, 1);
+      buf1.blendPixel(0, 0, 0.5, 0.5, 0.5, 1, 'multiply');
+      buf2.blendPixelUnchecked(0, 0, 0.5, 0.5, 0.5, 1, 'multiply');
+      for (let i = 0; i < 4; i++) {
+        expect(buf2.data[i]).toBeCloseTo(buf1.data[i]!, 10);
+      }
+    });
+  });
+
+  describe('setRowUnchecked', () => {
+    it('writes a full row of float data', () => {
+      const buf = new ColorBuffer(4, 4);
+      const row = new Float32Array([
+        1, 0, 0, 1,  // red
+        0, 1, 0, 1,  // green
+        0, 0, 1, 1,  // blue
+        1, 1, 0, 1,  // yellow
+      ]);
+      buf.setRowUnchecked(2, 0, 4, row);
+
+      expect(buf.getPixel(0, 2)).toEqual([1, 0, 0, 1]);
+      expect(buf.getPixel(1, 2)).toEqual([0, 1, 0, 1]);
+      expect(buf.getPixel(2, 2)).toEqual([0, 0, 1, 1]);
+      expect(buf.getPixel(3, 2)).toEqual([1, 1, 0, 1]);
+    });
+
+    it('writes a partial row starting at an offset', () => {
+      const buf = new ColorBuffer(10, 10);
+      buf.clear(0.5, 0.5, 0.5, 1);
+      const row = new Float32Array([1, 0, 0, 1, 0, 1, 0, 1]); // 2 pixels
+      buf.setRowUnchecked(5, 3, 2, row);
+
+      expect(buf.getPixel(3, 5)).toEqual([1, 0, 0, 1]);
+      expect(buf.getPixel(4, 5)).toEqual([0, 1, 0, 1]);
+      // Adjacent pixels untouched
+      const [r] = buf.getPixel(2, 5);
+      expect(r).toBeCloseTo(0.5);
+    });
+
+    it('works with Float64 buffers', () => {
+      const buf = new ColorBuffer(4, 4, 64);
+      const row = new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
+      buf.setRowUnchecked(0, 0, 2, row);
+
+      const [r, g, b, a] = buf.getPixel(0, 0);
+      expect(r).toBeCloseTo(0.1);
+      expect(g).toBeCloseTo(0.2);
+      expect(b).toBeCloseTo(0.3);
+      expect(a).toBeCloseTo(0.4);
+    });
+
+    it('produces identical results to setPixel', () => {
+      const buf1 = new ColorBuffer(100, 1);
+      const buf2 = new ColorBuffer(100, 1);
+      const row = new Float32Array(100 * 4);
+      for (let i = 0; i < 100; i++) {
+        const r = Math.random();
+        const g = Math.random();
+        const b = Math.random();
+        const a = Math.random();
+        row[i * 4] = r;
+        row[i * 4 + 1] = g;
+        row[i * 4 + 2] = b;
+        row[i * 4 + 3] = a;
+        buf1.setPixel(i, 0, r, g, b, a);
+      }
+      buf2.setRowUnchecked(0, 0, 100, row);
+
+      for (let i = 0; i < buf1.data.length; i++) {
+        expect(buf2.data[i]).toBe(buf1.data[i]);
+      }
+    });
+  });
+
+  describe('blendRowUnchecked', () => {
+    it('blends a row with normal mode', () => {
+      const buf = new ColorBuffer(3, 1);
+      buf.clear(1, 0, 0, 1); // red background
+      const row = new Float32Array([
+        0, 1, 0, 1,    // green, fully opaque → replaces
+        0, 0, 1, 0.5,  // blue, 50% → blends
+        0, 0, 0, 0,    // transparent → skipped
+      ]);
+      buf.blendRowUnchecked(0, 0, 3, row, 'normal');
+
+      // Fully opaque green replaces red
+      const [r0, g0] = buf.getPixel(0, 0);
+      expect(r0).toBeCloseTo(0);
+      expect(g0).toBeCloseTo(1);
+
+      // 50% blue blended over red
+      const [r1, , b1, a1] = buf.getPixel(1, 0);
+      expect(a1).toBeCloseTo(1);
+      expect(r1).toBeGreaterThan(0.1);
+      expect(b1).toBeGreaterThan(0.1);
+
+      // Transparent pixel → original red preserved
+      const [r2, g2] = buf.getPixel(2, 0);
+      expect(r2).toBeCloseTo(1);
+      expect(g2).toBeCloseTo(0);
+    });
+
+    it('blends with add mode', () => {
+      const buf = new ColorBuffer(2, 1);
+      buf.setPixel(0, 0, 0.3, 0.3, 0.3, 1);
+      buf.setPixel(1, 0, 0.5, 0.5, 0.5, 1);
+      const row = new Float32Array([
+        0.2, 0.2, 0.2, 1,
+        0.3, 0.3, 0.3, 1,
+      ]);
+      buf.blendRowUnchecked(0, 0, 2, row, 'add');
+
+      const [r0] = buf.getPixel(0, 0);
+      expect(r0).toBeCloseTo(0.5);
+      const [r1] = buf.getPixel(1, 0);
+      expect(r1).toBeCloseTo(0.8);
+    });
+
+    it('produces identical results to per-pixel blendPixel', () => {
+      const buf1 = new ColorBuffer(50, 1);
+      const buf2 = new ColorBuffer(50, 1);
+      // Same background
+      buf1.clear(0.5, 0.3, 0.7, 1);
+      buf2.clear(0.5, 0.3, 0.7, 1);
+
+      const row = new Float32Array(50 * 4);
+      for (let i = 0; i < 50; i++) {
+        const r = Math.random();
+        const g = Math.random();
+        const b = Math.random();
+        const a = Math.random();
+        row[i * 4] = r;
+        row[i * 4 + 1] = g;
+        row[i * 4 + 2] = b;
+        row[i * 4 + 3] = a;
+        buf1.blendPixel(i, 0, r, g, b, a, 'normal');
+      }
+      buf2.blendRowUnchecked(0, 0, 50, row, 'normal');
+
+      for (let i = 0; i < buf1.data.length; i++) {
+        expect(buf2.data[i]).toBeCloseTo(buf1.data[i]!, 5);
+      }
+    });
+  });
 });

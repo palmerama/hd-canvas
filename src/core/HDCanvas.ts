@@ -128,6 +128,40 @@ export class HDCanvas {
     this.previewRenderer?.refresh();
   }
 
+  /**
+   * Signal that a frame is complete and yield to the browser.
+   *
+   * This is the recommended way to drive generative/animated renders:
+   * 1. Triggers a preview refresh (if a renderer is attached)
+   * 2. Returns a Promise that resolves after the next animation frame,
+   *    giving the browser time to paint and handle user input (zoom/pan)
+   *
+   * If no preview renderer is attached (headless mode), resolves immediately
+   * with zero overhead — safe to call unconditionally.
+   *
+   * @example
+   * ```ts
+   * for (let frame = 0; frame < 1000; frame++) {
+   *   drawMyFrame(canvas, frame);
+   *   await canvas.commitFrame();  // preview updates, UI stays responsive
+   * }
+   * ```
+   */
+  commitFrame(): Promise<void> {
+    if (!this.previewRenderer) {
+      return Promise.resolve();
+    }
+    this.previewRenderer.refresh();
+    // Yield to the browser's paint cycle via rAF if available (browser).
+    // Falls back to microtask resolution in Node.js/headless environments.
+    if (typeof requestAnimationFrame === 'function') {
+      return new Promise<void>(resolve => {
+        requestAnimationFrame(() => resolve());
+      });
+    }
+    return Promise.resolve();
+  }
+
   // --- Export ---
 
   /**

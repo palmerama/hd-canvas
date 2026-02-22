@@ -144,6 +144,46 @@ describe('HDCanvas', () => {
     });
   });
 
+  describe('commitFrame', () => {
+    it('resolves immediately without a renderer (headless)', async () => {
+      const canvas = new HDCanvas({
+        paperSize: { widthMM: 25.4, heightMM: 25.4 },
+        dpi: 10,
+      });
+      // Should resolve without error and without delay
+      await canvas.commitFrame();
+    });
+
+    it('calls refresh on attached renderer', async () => {
+      const canvas = new HDCanvas({
+        paperSize: { widthMM: 25.4, heightMM: 25.4 },
+        dpi: 10,
+      });
+      const renderer = { refresh: vi.fn(), destroy: vi.fn() };
+      canvas.setPreviewRenderer(renderer);
+
+      // commitFrame triggers refresh
+      const promise = canvas.commitFrame();
+      expect(renderer.refresh).toHaveBeenCalledOnce();
+      await promise;
+    });
+
+    it('can be called in a loop without blocking', async () => {
+      const canvas = new HDCanvas({
+        paperSize: { widthMM: 25.4, heightMM: 25.4 },
+        dpi: 10,
+      });
+      const renderer = { refresh: vi.fn(), destroy: vi.fn() };
+      canvas.setPreviewRenderer(renderer);
+
+      for (let i = 0; i < 5; i++) {
+        canvas.setPixel(0, 0, i / 5, 0, 0, 1);
+        await canvas.commitFrame();
+      }
+      expect(renderer.refresh).toHaveBeenCalledTimes(5);
+    });
+  });
+
   describe('export', () => {
     it('throws without an export function', async () => {
       const canvas = new HDCanvas({

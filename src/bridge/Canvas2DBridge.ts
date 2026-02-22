@@ -109,35 +109,32 @@ function drawTile(
   const imageData = ctx.getImageData(0, 0, tileW, tileH);
   const pixels = imageData.data; // Uint8ClampedArray, RGBA
 
-  // Write into the float buffer
+  // Convert uint8 → float row by row, then bulk-write into the buffer.
+  // This avoids per-pixel function calls + bounds checks (setPixel/blendPixel).
+  // For A3 @ 300 DPI this reduces ~70M function calls to ~5K row operations.
   const inv255 = 1 / 255;
+  const rowFloats = buffer.depth === 64
+    ? new Float64Array(tileW * 4)
+    : new Float32Array(tileW * 4);
 
   if (mode === 'overwrite') {
     for (let row = 0; row < tileH; row++) {
-      for (let col = 0; col < tileW; col++) {
-        const srcIdx = (row * tileW + col) * 4;
-        const r = pixels[srcIdx]! * inv255;
-        const g = pixels[srcIdx + 1]! * inv255;
-        const b = pixels[srcIdx + 2]! * inv255;
-        const a = pixels[srcIdx + 3]! * inv255;
-        buffer.setPixel(tileX + col, tileY + row, r, g, b, a);
+      const rowStart = row * tileW * 4;
+      // Convert entire row from uint8 to float in one pass
+      for (let i = 0; i < tileW * 4; i++) {
+        rowFloats[i] = pixels[rowStart + i]! * inv255;
       }
+      // Single bulk write per row — no bounds checks, no function call overhead
+      buffer.setRowUnchecked(tileY + row, tileX, tileW, rowFloats);
     }
   } else {
-    // Blend mode — alpha composite onto existing content
+    // Blend mode — alpha composite onto existing content, row at a time
     for (let row = 0; row < tileH; row++) {
-      for (let col = 0; col < tileW; col++) {
-        const srcIdx = (row * tileW + col) * 4;
-        const r = pixels[srcIdx]! * inv255;
-        const g = pixels[srcIdx + 1]! * inv255;
-        const b = pixels[srcIdx + 2]! * inv255;
-        const a = pixels[srcIdx + 3]! * inv255;
-
-        // Skip fully transparent pixels (common optimization)
-        if (a === 0) continue;
-
-        buffer.blendPixel(tileX + col, tileY + row, r, g, b, a, blendMode);
+      const rowStart = row * tileW * 4;
+      for (let i = 0; i < tileW * 4; i++) {
+        rowFloats[i] = pixels[rowStart + i]! * inv255;
       }
+      buffer.blendRowUnchecked(tileY + row, tileX, tileW, rowFloats, blendMode);
     }
   }
 

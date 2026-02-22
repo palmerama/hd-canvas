@@ -176,4 +176,170 @@ export class ColorBuffer implements IColorBuffer {
       this.data.set(region.data.subarray(srcStart, srcStart + region.width * 4), dstStart);
     }
   }
+
+  /**
+   * Set a pixel without bounds checking.
+   * Caller must ensure 0 <= x < width and 0 <= y < height.
+   * Use in hot loops where bounds are validated at the region level.
+   */
+  setPixelUnchecked(x: number, y: number, r: number, g: number, b: number, a: number = 1.0): void {
+    const i = (y * this.width + x) * 4;
+    this.data[i] = r;
+    this.data[i + 1] = g;
+    this.data[i + 2] = b;
+    this.data[i + 3] = a;
+  }
+
+  /**
+   * Blend a pixel without bounds checking.
+   * Same alpha compositing as blendPixel, but skips the bounds check.
+   * Caller must ensure 0 <= x < width and 0 <= y < height.
+   */
+  blendPixelUnchecked(
+    x: number,
+    y: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+    mode: BlendMode = 'normal'
+  ): void {
+    const i = (y * this.width + x) * 4;
+    const dstR = this.data[i]!;
+    const dstG = this.data[i + 1]!;
+    const dstB = this.data[i + 2]!;
+    const dstA = this.data[i + 3]!;
+
+    let blendedR: number;
+    let blendedG: number;
+    let blendedB: number;
+
+    switch (mode) {
+      case 'normal':
+        blendedR = r;
+        blendedG = g;
+        blendedB = b;
+        break;
+      case 'add':
+        blendedR = dstR + r;
+        blendedG = dstG + g;
+        blendedB = dstB + b;
+        break;
+      case 'multiply':
+        blendedR = dstR * r;
+        blendedG = dstG * g;
+        blendedB = dstB * b;
+        break;
+      default: {
+        const _exhaustive: never = mode;
+        throw new Error(`Unknown blend mode: ${_exhaustive}`);
+      }
+    }
+
+    const outA = a + dstA * (1 - a);
+    if (outA === 0) {
+      this.data[i] = 0;
+      this.data[i + 1] = 0;
+      this.data[i + 2] = 0;
+      this.data[i + 3] = 0;
+    } else {
+      this.data[i] = (blendedR * a + dstR * dstA * (1 - a)) / outA;
+      this.data[i + 1] = (blendedG * a + dstG * dstA * (1 - a)) / outA;
+      this.data[i + 2] = (blendedB * a + dstB * dstA * (1 - a)) / outA;
+      this.data[i + 3] = outA;
+    }
+  }
+
+  /**
+   * Write a row of RGBA float data directly into the buffer.
+   * No bounds checking on individual pixels — caller must ensure:
+   * - 0 <= y < height
+   * - 0 <= startX, startX + pixelCount <= width
+   * - floats.length >= pixelCount * 4
+   *
+   * This is the fast path for bulk writes (Canvas2DBridge, procedural fills).
+   */
+  setRowUnchecked(y: number, startX: number, pixelCount: number, floats: Float32Array | Float64Array): void {
+    const dstOffset = (y * this.width + startX) * 4;
+    // Use subarray + set for a single memcpy-like operation per row
+    this.data.set(floats.subarray(0, pixelCount * 4), dstOffset);
+  }
+
+  /**
+   * Blend a row of RGBA float data onto the buffer using normal alpha compositing.
+   * Same safety contract as setRowUnchecked — no bounds checks.
+   *
+   * Skips fully transparent pixels (a === 0) for performance.
+   */
+  blendRowUnchecked(
+    y: number,
+    startX: number,
+    pixelCount: number,
+    floats: Float32Array | Float64Array,
+    mode: BlendMode = 'normal'
+  ): void {
+    const data = this.data;
+    let dstIdx = (y * this.width + startX) * 4;
+
+    for (let p = 0; p < pixelCount; p++) {
+      const srcIdx = p * 4;
+      const a = floats[srcIdx + 3]!;
+
+      // Skip fully transparent pixels
+      if (a === 0) {
+        dstIdx += 4;
+        continue;
+      }
+
+      const r = floats[srcIdx]!;
+      const g = floats[srcIdx + 1]!;
+      const b = floats[srcIdx + 2]!;
+
+      const dstR = data[dstIdx]!;
+      const dstG = data[dstIdx + 1]!;
+      const dstB = data[dstIdx + 2]!;
+      const dstA = data[dstIdx + 3]!;
+
+      let blendedR: number;
+      let blendedG: number;
+      let blendedB: number;
+
+      switch (mode) {
+        case 'normal':
+          blendedR = r;
+          blendedG = g;
+          blendedB = b;
+          break;
+        case 'add':
+          blendedR = dstR + r;
+          blendedG = dstG + g;
+          blendedB = dstB + b;
+          break;
+        case 'multiply':
+          blendedR = dstR * r;
+          blendedG = dstG * g;
+          blendedB = dstB * b;
+          break;
+        default: {
+          const _exhaustive: never = mode;
+          throw new Error(`Unknown blend mode: ${_exhaustive}`);
+        }
+      }
+
+      const outA = a + dstA * (1 - a);
+      if (outA === 0) {
+        data[dstIdx] = 0;
+        data[dstIdx + 1] = 0;
+        data[dstIdx + 2] = 0;
+        data[dstIdx + 3] = 0;
+      } else {
+        data[dstIdx] = (blendedR * a + dstR * dstA * (1 - a)) / outA;
+        data[dstIdx + 1] = (blendedG * a + dstG * dstA * (1 - a)) / outA;
+        data[dstIdx + 2] = (blendedB * a + dstB * dstA * (1 - a)) / outA;
+        data[dstIdx + 3] = outA;
+      }
+
+      dstIdx += 4;
+    }
+  }
 }

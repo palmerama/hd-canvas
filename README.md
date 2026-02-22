@@ -178,8 +178,9 @@ const preview = new PreviewRenderer(canvas, {
   container: document.getElementById('preview')!,
 });
 
-preview.refresh(); // re-render after drawing changes
-preview.destroy(); // clean up event listeners
+preview.refresh();       // re-render after drawing changes (rAF batched)
+preview.renderFrame();   // synchronous render (bypasses rAF batching)
+preview.destroy();       // clean up event listeners
 ```
 
 **Controls:**
@@ -415,6 +416,69 @@ const canvas = new HDCanvas({
   colorDepth: 64,  // Float64 for maximum precision
 });
 ```
+
+### Frame Control
+
+For generative art and animated renders, use `commitFrame()` to pace your render loop:
+
+```typescript
+// Producer controls the pace — every frame is guaranteed visible
+async function render(canvas: HDCanvas) {
+  for (let frame = 0; frame < 1000; frame++) {
+    drawMyFrame(canvas, frame);
+    await canvas.commitFrame(); // refresh preview, yield to browser
+  }
+}
+```
+
+`commitFrame()` does three things:
+1. Triggers a preview refresh (if a renderer is attached)
+2. Yields to the browser via `requestAnimationFrame` — giving it time to paint and handle input
+3. Returns a Promise that resolves after the next animation frame
+
+If no preview is attached (headless/Node.js), it resolves immediately with zero overhead.
+
+### Performance: Direct Buffer Access
+
+For maximum write throughput, access the typed array directly:
+
+```typescript
+// Direct data access — no function call overhead, no bounds checks
+const data = canvas.buffer.data; // Float32Array (or Float64Array)
+const w = canvas.widthPx;
+
+for (let y = 0; y < canvas.heightPx; y++) {
+  for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    data[i]     = r;  // R
+    data[i + 1] = g;  // G
+    data[i + 2] = b;  // B
+    data[i + 3] = 1;  // A
+  }
+}
+```
+
+For hot loops where bounds are validated at the region level, use the unchecked methods:
+
+```typescript
+// Per-pixel unchecked — skips bounds validation
+canvas.buffer.setPixelUnchecked(x, y, r, g, b, a);
+canvas.buffer.blendPixelUnchecked(x, y, r, g, b, a, 'add');
+
+// Row-level bulk write — fastest for Canvas2DBridge-style patterns
+const rowData = new Float32Array(width * 4);
+// ... fill rowData ...
+canvas.buffer.setRowUnchecked(y, startX, pixelCount, rowData);
+canvas.buffer.blendRowUnchecked(y, startX, pixelCount, rowData, 'normal');
+```
+
+**Performance hierarchy** (fastest → slowest):
+1. Direct `buffer.data` access — zero overhead
+2. `setRowUnchecked` / `blendRowUnchecked` — one call per row
+3. `setPixelUnchecked` / `blendPixelUnchecked` — one call per pixel, no bounds check
+4. `setPixel` / `blendPixel` — one call per pixel with bounds validation
+
+> **Tip:** Float32 (the default) is recommended for most use cases. It provides 7 significant digits of precision — more than enough for HDR color — at half the memory of Float64. For A3 @ 300 DPI, that's 67 MB vs 134 MB.
 
 ## Paper Size Reference
 
